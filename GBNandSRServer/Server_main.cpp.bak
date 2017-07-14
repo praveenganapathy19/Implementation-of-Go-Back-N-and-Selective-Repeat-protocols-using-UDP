@@ -1,0 +1,253 @@
+
+/*Header Files*/
+#include <cstdlib>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h> 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include<iostream>
+#include<sstream>
+#include <bitset>
+#include<fstream>
+#include<csignal>
+using namespace std;
+int sockfd;
+void ServerReceiving_Error();
+void ServerSending_Error();
+void GoBackNServer(int gbnsocket,int gbntotPacket,string gbnsegSize,string gbnwinSize);
+int computeChecksum(string data, string chksum);
+
+
+socklen_t clientLength;
+struct sockaddr_in serverAddr, clientAddr;
+
+/*Function for displaying corresponding error message*/
+void error(const char *msg)
+{
+    perror(msg);
+    exit(1);
+}
+
+/**
+ * Function responsible for handling key-press Interrupts (Ctrl+C)
+ * Closes all the active sockets and exits control
+ */
+void signalHandler( int signum) {
+   cout << "Interrupt signal (" << signum << ") received.\n";
+   cout<<"Closing Server and Client socket connections\n";
+   //close(newsockfd);
+   close(sockfd);
+   exit(signum);  
+}
+
+/**
+ * @param argc-- takes integer value; gives the number of arguments
+ * @param argv-- takes char pointer; server takes one argument: PORT Number
+ * @return integer
+ */
+int main(int argc, char *argv[])
+{
+	/*Variable Declaration*/
+    int portNumber,totalPkts;
+    
+    char buffer[256];
+    char recvSegsize[4],recvWinsize[5],recvProtocol[5];
+    string segmentSize,windowSize,protocolName; 
+    
+    int n;
+    
+    string *recvData, *recvChksum;
+    int *recvintBuf;
+    signal(SIGINT, signalHandler);
+	
+    /*checks for the PORT number argument*/
+    if (argc < 2) {
+        fprintf(stderr,"ERROR, no port provided\n");
+        exit(1);
+    }
+	
+    /*
+     * Create Internet domain socket
+     *  and checks for error in creating the socket
+     */
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) 
+       error("ERROR opening socket");
+   
+   //Fills the entire socket structure with Zeroes
+    bzero((char *) &serverAddr, sizeof(serverAddr));
+    portNumber = atoi(argv[1]);
+	
+    /*
+     * sets the values of socket structure members
+     * and binds them with a defined socket
+     */
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serverAddr.sin_port = htons(portNumber);
+    if (bind(sockfd, (struct sockaddr *) &serverAddr,
+             sizeof(serverAddr)) < 0) 
+             error("ERROR in binding");
+    cout<<"\nListening on port "<<portNumber<<" \n";
+    
+    clientLength = sizeof(clientAddr);
+    memset(recvintBuf,0,sizeof(recvintBuf));
+    if((recvfrom(sockfd,recvintBuf, sizeof(recvintBuf), 0, (struct sockaddr *) &clientAddr, &clientLength))<0)
+        ServerReceiving_Error();
+    
+    memset(recvProtocol,0,sizeof(recvProtocol));
+    if((recvfrom(sockfd,recvProtocol, sizeof(recvProtocol), 0, (struct sockaddr *) &clientAddr, &clientLength))<0)
+        ServerReceiving_Error();
+    
+    memset(recvSegsize,0,sizeof(recvSegsize));
+    if((recvfrom(sockfd,recvSegsize, sizeof(recvSegsize), 0, (struct sockaddr *) &clientAddr, &clientLength))<0)
+        ServerReceiving_Error();
+    
+    memset(recvWinsize,0,sizeof(recvWinsize));
+    if((recvfrom(sockfd,recvWinsize, sizeof(recvWinsize), 0, (struct sockaddr *) &clientAddr, &clientLength))<0)
+        ServerReceiving_Error();
+    
+    protocolName=recvProtocol;
+    segmentSize=recvSegsize;
+    windowSize=recvWinsize;
+    totalPkts=*recvintBuf;
+        
+    cout<<"Protocol Name as received from Client is:"<<protocolName<<endl;
+    cout<<"Total Packets as received from Client is:"<<totalPkts<<endl;
+    cout<<"Segment Size as received from Client is:"<<segmentSize<<endl;
+    cout<<"Window Size as received from Client is:"<<windowSize<<endl;
+    
+    if(protocolName == "GBN")
+  {
+       cout<<"This is GBN"<<endl;
+       GoBackNServer(sockfd,totalPkts,segmentSize,windowSize);
+  }
+  else if(protocolName == "SR")
+       cout<<"This is SR"<<endl;
+  else
+  cout<<"Enter one of the following protocols: GBN or SR"<<endl;
+    
+    
+    //closes all the open sockets
+    cout<<"\nConnection Ended";
+    //close(newsockfd);
+    close(sockfd);
+    return 0; 
+}
+
+
+void GoBackNServer(int gbnsocket,int gbntotPacket,string gbnsegSize,string gbnwinSize)
+{
+    int recvdataLen,recvChksumLen,gbnWinSize,cmpChksum,seqnumServer=0;
+    char charBuffer[13];
+    string recvcheckSum,receivedData,recvSeqnum,ackPacket;
+    gbnWinSize=atoi(gbnwinSize.c_str());
+    srand(time(0));
+    int ackRand= rand() % (gbntotPacket-20) + 5;
+    //cout<<ackRand<<endl;
+    while(1)
+    {   
+        /*
+        for(int j=0;j<(gbntotPacket);j++)
+        {
+            seqnumServer=j%((atoi(gbnwinSize.c_str()))+1);
+            cout<<"Expecting Packet "<<seqnumServer<<endl;
+        */
+            memset(charBuffer, 0, sizeof(charBuffer));
+            recvdataLen=recvfrom(gbnsocket,charBuffer, sizeof(charBuffer), 0, (struct sockaddr *) &clientAddr, &clientLength);
+            if( recvdataLen<0)
+                ServerReceiving_Error();
+
+            //total data received
+            //cout<<(string)charBuffer<<endl;
+
+            //reads the seq numbers based on number of digits; either 1 or 2 digits of sequence numbers
+            recvSeqnum=((string)charBuffer).substr(9,(strlen(charBuffer))-9);
+            recvcheckSum=((string)charBuffer).substr(1,8);
+            
+            receivedData=charBuffer[0];
+
+            cout<<"Received Checksum is "<<recvcheckSum<<endl;
+            cout<<"Received Data is "<<receivedData<<endl;
+            cout<<"Received Sequence Number is "<<recvSeqnum<<endl;
+            
+            
+            cmpChksum= computeChecksum(receivedData,recvcheckSum);
+            //computing checksum at receiver and comparing
+            /*
+            if((computeChecksum(receivedData,recvcheckSum))==1)
+                cout<<"Received data correct"<<endl;
+            else if((computeChecksum(receivedData,recvcheckSum))==0)
+                cout<<"Received data not correct"<<endl;
+            */
+            if((cmpChksum==1) && (seqnumServer%(gbnWinSize+1))==(atoi(recvSeqnum.c_str())))
+            {
+                if((seqnumServer==ackRand))
+                {
+                     cout<<"---------------ACK lost at packet "<<seqnumServer<<"------------------"<<endl;
+                     seqnumServer++;
+                    ackRand=-1;
+                }
+                
+                else
+                {
+                    if(seqnumServer>gbnWinSize)
+                    {
+                        seqnumServer=0;
+                    }
+                    ackPacket="ACK:" + std::to_string(seqnumServer);
+                    if(seqnumServer<=gbnWinSize)
+                    {
+                        seqnumServer++;
+                    }
+                    cout<<"Sending ACK for the packet as "<<ackPacket<<endl;
+                    int a=(sendto(gbnsocket,ackPacket.c_str(),strlen(ackPacket.c_str()),0,(struct sockaddr *) &clientAddr, sizeof(clientAddr)));
+                    if ( a < 0)
+                        ServerSending_Error();
+                    cout<<"----------------------------"<<endl;
+                }
+            }
+            else
+            {
+                
+                int duplAck=seqnumServer-1;
+                ackPacket="ACK:" + std::to_string(duplAck);
+                cout<<"Sending duplicate ACK for the packet as "<<duplAck<<endl;
+                int b=(sendto(gbnsocket,ackPacket.c_str(),strlen(ackPacket.c_str()),0,(struct sockaddr *) &clientAddr, sizeof(clientAddr)));
+                if ( b < 0)
+                    ServerSending_Error();
+                cout<<"----------------------------"<<endl;
+            }
+        //}
+    }
+}
+
+
+int computeChecksum(string data,string chksum)
+{
+    const int chkBits=8;
+    std::bitset<chkBits> binarychk=int(data[0]);
+    string cmpChksum=((~binarychk).to_string<char,std::string::traits_type,std::string::allocator_type>());
+    cout<<"Computed checksum at the Server is "<<cmpChksum<<endl;
+    if(strcmp(chksum.c_str(),cmpChksum.c_str())==0)
+        return 1;
+    else
+        return 0;
+}
+
+
+void ServerReceiving_Error()
+{
+        cout<<"Error receiving data";
+        cout<<errno<<endl;
+        exit(0);
+}
+
+void ServerSending_Error()
+{
+        cout<<"Error Sending data";
+        cout<<errno<<endl;
+        exit(0);
+}
